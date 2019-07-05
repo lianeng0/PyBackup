@@ -58,7 +58,7 @@ def clear_old_backup():
     if 'ftp' in REMOTE_SAVE_TYPE:
         #清除远程FTP上旧备份文件
         for option in FTP_OPTIONS:
-            ftp = FtpHelper(option['host'],option['username'], option['password'],option['port'])
+            ftp = FtpHelper(option['host'],option['username'], option['password'],option['port'],option['pasv'])
 
             for filename in ftp.get_files(option['site_save_path']):
                 if is_oldfile(filename):
@@ -122,20 +122,29 @@ def is_oldfile(filename):
 
 #远程保存
 def remote_save(site_files,db_files):
+    errcount=0
     for type in REMOTE_SAVE_TYPE:
-        if type not in 'ftp,email,cos,oss,onedrive':
-            log('远程保存配置类型"' + type + '"错误，应该为ftp,email')
+        if type not in 'ftp,email,cos,oss,onedrive' or not type:
+            log('远程保存配置类型"' + type + '"错误，应该为ftp,email,cos,oss,onedrive')
             continue
-        if type == 'ftp':
-            remote_save_ftp(site_files , db_files)
-        elif type == 'email':
-            remote_save_email(site_files ,db_files)
-        elif type == 'oss':
-            remote_save_oss(site_files,db_files)
-        elif type == 'cos':
-            remote_save_cos(site_files,db_files)
-        elif type == 'onedrive':
-            remote_save_onedrive(site_files,db_files)
+        while errcount < ERROR_COUNT:
+            try:
+                if type == 'ftp':
+                    remote_save_ftp(site_files , db_files)
+                elif type == 'email':
+                    remote_save_email(site_files ,db_files)
+                elif type == 'oss':
+                    remote_save_oss(site_files,db_files)
+                elif type == 'cos':
+                    remote_save_cos(site_files,db_files)
+                elif type == 'onedrive':
+                    remote_save_onedrive(site_files,db_files)
+                break
+            except Exception as e:
+                log(str(e))
+                print(str(e))
+                errcount = errcount + 1
+                print('备份' + type + '方式第' + str(errcount) + '次出错')
     FileHelper.move_bulk(site_files,LOCAL_SAVE_PATH['sites'])
     FileHelper.move_bulk(db_files,LOCAL_SAVE_PATH['databases'])
 
@@ -143,6 +152,8 @@ def remote_save(site_files,db_files):
 def remote_save_onedrive(site_files,db_files):
     log('开始上传到OneDrive')
     for option in ONE_DRIVE_OPTION:
+        if not option:
+            continue
         print('开始上传到:' + option['name'])
         od = OneDriveHelper(option['name'])
         for file in site_files:
@@ -161,6 +172,8 @@ def remote_save_onedrive(site_files,db_files):
 def remote_save_oss(site_files,db_files):
     log('开始上传到oss')
     for option in OSS_OPTIONS:
+        if not option:
+            continue
         oss = OssHelper(option['accesskeyid'],option['accesskeysecret'],option['url'],option['bucket'])
         for file in site_files:
             if not file:
@@ -179,6 +192,8 @@ def remote_save_oss(site_files,db_files):
 def remote_save_cos(site_files,db_files):
     log('开始上传到cos')
     for option in COS_OPTIONS:
+        if not option:
+            continue
         cos = CosHelper(option['accesskeyid'],option['accesskeysecret'],option['region'],option['bucket'])
         for file in site_files:
             if not file:
@@ -197,7 +212,7 @@ def remote_save_cos(site_files,db_files):
 def remote_save_ftp(site_files,db_files):
     log('开始上传到FTP')
     for option in FTP_OPTIONS:
-        ftp = FtpHelper(option['host'],option['username'], option['password'],option['port'])
+        ftp = FtpHelper(option['host'],option['username'], option['password'],option['port'],option['pasv'])
         for file in site_files:
             if not file:
                 continue
@@ -220,15 +235,38 @@ def remote_save_email(site_files,db_files):
         for file in site_files:
             if not file:
                 continue
-            flag,msg = email.send('新的站点备份','站点备份:' + os.path.basename(file),'站点备份:' + os.path.basename(file),EMAIL_OPTIONS_RECEIVERS,[file])
+            if option['partSize']:
+                part_file_path = os.path.join(TEMP_SAVE_PATH,'EmailPart')
+                if not os.path.exists(part_file_path):
+                    os.makedirs(part_file_path)
+                flag,msg = FileHelper.compress(option['archive_type'],file,part_file_path,os.path.basename(file),
+                                       None,None,None,None,option['partSize'])
+                part_files = FileHelper.get_file_list(part_file_path)
+                for part_file in part_files:
+                    flag,msg = email.send('新的站点备份','站点备份:' + os.path.basename(part_file),'站点备份:' + os.path.basename(part_file),EMAIL_OPTIONS_RECEIVERS,[part_file])
+                FileHelper.delete(part_file_path)
+            else:
+                flag,msg = email.send('新的站点备份','站点备份:' + os.path.basename(file),'站点备份:' + os.path.basename(file),EMAIL_OPTIONS_RECEIVERS,[file])
             if flag:
                 log('使用 {0} 发送邮件 {1} 成功'.format(option['username'],file))
             else:
                 log('使用 {0} 发送邮件 {1} 失败，原因:'.format(option['username'],file,msg))
+        
         for file in db_files:
             if not file:
                 continue
-            flag,msg = email.send('新的数据库备份','数据库备份:' + os.path.basename(file),'数据库备份:' + os.path.basename(file),EMAIL_OPTIONS_RECEIVERS,[file])
+            if option['partSize']:
+                if not os.path.exists(part_file_path):
+                   os.makedirs(part_file_path)
+                part_file_path = os.path.join(TEMP_SAVE_PATH,'EmailPart')
+                flag,msg = FileHelper.compress(option['archive_type'],file,part_file_path,os.path.basename(file),
+                                       None,None,None,None,option['partSize'])
+                part_files = FileHelper.get_file_list(part_file_path)
+                for part_file in part_files:
+                    flag,msg = email.send('新的数据库备份','数据库备份:' + os.path.basename(part_file),'数据库备份:' + os.path.basename(part_file),EMAIL_OPTIONS_RECEIVERS,[part_file])
+                FileHelper.delete(part_file_path)
+            else:
+                flag,msg = email.send('新的数据库备份','数据库备份:' + os.path.basename(file),'数据库备份:' + os.path.basename(file),EMAIL_OPTIONS_RECEIVERS,[file])
             if flag:
                 log('使用 {0} 发送邮件 {1} 成功'.format(option['username'],file))
             else:
@@ -241,9 +279,11 @@ def backup_site():
     site_files = []
     log('开始备份站点')
     for site in SITES:
+        if not site:
+            continue
         site_path = site['path']
         if site['type'] == 'ftp':
-            ftp = FtpHelper(site['host'],site['username'], site['password'],site['port'])
+            ftp = FtpHelper(site['host'],site['username'], site['password'],site['port'],site['pasv'])
             log('开始下载FTP远程目录:' + site['path'])
             ftp.download_dir(os.path.join(TEMP_SAVE_PATH ,os.path.basename(site['path'])),site['path'])
             log('下载FTP远程目录结束')
@@ -257,7 +297,8 @@ def backup_site():
             continue
         dirname = os.path.basename(site_path)
         site_filename = dirname + '_' + get_datestr()
-        flag,msg = FileHelper.compress(archive_type,site_path,TEMP_SAVE_PATH,site_filename,site['archive_password'])
+        flag,msg = FileHelper.compress(archive_type,site_path,TEMP_SAVE_PATH,site_filename,
+                                       site['archive_password'],site['ignore_dir'],site['ignore_ext'],site['ignore_file'])
         if site['type'] == 'ftp':
             FileHelper.delete(site_path)
         if not flag:
@@ -272,6 +313,8 @@ def backup_site():
 def backup_db():
     db_files = []
     for db in DATABASES:
+        if not db:
+            continue
         db_type = db['type']
         if db_type not in 'mssql,mysql':
             log('type数据库类型错误,应该为mssql,mysql')
@@ -293,7 +336,7 @@ def backup_db_mssql(db):
         log('archive_type存档类型"' + archive_type + '"错误,应该为zip,tar,gztar')
         return None
     sqlcmd = 'sqlcmd' if not db['sqlcmd_path'] else db['sqlcmd_path']
-    cmd = '{0} -S {1} -U {2} -P {3} -Q "BACKUP DATABASE {4} to disk="{5}"'.format(sqlcmd,db['host'],db['username'],db['password'],db['database_name'],db_filepath)
+    cmd = '{0} -S {1},{2} -U {3} -P {4} -Q "BACKUP DATABASE {5} to disk="{6}"'.format(sqlcmd,db['host'],db['port'],db['username'],db['password'],db['database_name'],db_filepath)
     status,result = subprocess.getstatusoutput(cmd)
     if status != 0:
         log('备份数据库{0}出错,返回值为{1},执行的命令为{2}'.format(db['database_name'],result,cmd))
@@ -319,7 +362,7 @@ def backup_db_mysql(db):
         return None
     host = '' if not db['host']  else   '-h ' + db['host']
     mysqldump = 'mysqldump' if not db['mysqldump_path'] else db['mysqldump_path']
-    cmd = '{0} {1} -u{2} -p{3} --databases {4} > {5}'.format(mysqldump,host,db['username'],db['password'],db['database_name'],db_filepath)
+    cmd = '{0} {1} -P{2} -u{3} -p{4} --databases {5} > {6}'.format(mysqldump,host,db['port'],db['username'],db['password'],db['database_name'],db_filepath)
     status,result = subprocess.getstatusoutput(cmd)
     if status != 0:
         log('备份数据库{0}出错,返回值为{1},执行的命令为{2}'.format(db['database_name'],result,cmd))
